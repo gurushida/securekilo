@@ -98,6 +98,7 @@ struct editorConfig {
     struct erow* rows;
     int dirty;
     char* filename;
+    char* gpgtty;
     int gpgpid;
     char statusmsg[80];
     time_t statusmsg_time;
@@ -754,6 +755,7 @@ int openForSecureRead(char* filename) {
 	            die("dup2");
 	            return -1;
             }
+            putenv(E.gpgtty);
             execlp("gpg", "gpg", "--no-symkey-cache", "-d", NULL);
             die("execlp");
             return -1;
@@ -789,7 +791,7 @@ int openForSecureWrite(char* filename) {
 	            die("dup2");
 	            return -1;
             }
-
+            putenv(E.gpgtty);
             execlp("gpg", "gpg", "--no-symkey-cache", "-c", "--output", filename, NULL);
             die("execlp");
             return -1;
@@ -922,6 +924,64 @@ void editorSaveSecure() {
     free(output);
     E.dirty = 0;
     editorSetStatusMessage("%d data bytes encrypted into %d bytes written to disk", len, ebuf.st_size);
+}
+
+
+
+/**
+ * For gpg to accept reading data from stdin, we need
+ * to set the environment variable "GPG_TTY=<current tty>".
+ * The purpose of this function is to retrieve the current terminal. 
+ */
+void getTTY() {
+    int p[2];
+    if (-1 == pipe(p)) {
+        die("pipe");
+    }
+
+    int pid = fork();
+    switch(pid) {
+        case -1: die("fork"); return;
+        case 0: {
+            // child
+            close(p[0]);
+
+            if (-1 == dup2(p[1], 1)) {
+	            die("dup2");
+	            return;
+            }
+
+            execlp("tty", "tty", NULL);
+            die("execlp");
+            return;
+        }
+        default: {
+            // father
+            close(p[1]);
+            int N = 256;
+            char buf[N];
+            int len = 0;
+            int n;
+            while ((n = read(p[0], buf + len, N - len)) > 0) {
+                len += n;
+            }
+            close(p[0]);
+
+            int status;
+            waitpid(pid, &status, 0);
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+                dieWithMsg("Could not identify terminal");
+            }
+            while (len > 0 && (buf[len - 1] == '\r' || buf[len - 1] == '\n')) {
+                buf[len - 1] = '\0';
+                len--;
+            }
+
+            // Let's store GPG_TTY=<value>
+            E.gpgtty = malloc(len + 9);
+            sprintf(E.gpgtty, "GPG_TTY=%s", buf);
+        }
+    }
 }
 
 
@@ -1431,6 +1491,7 @@ void initEditor() {
 
 
 int main(int argc, char* argv[]) {
+    getTTY();
     enableRawMode();
     initEditor();
 
