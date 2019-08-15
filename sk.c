@@ -1,3 +1,4 @@
+
 /************************************ includes ************************************/
 
 #define _DEFAULT_SOURCE
@@ -24,9 +25,9 @@
 
 
 
-#define KILO_VERSION "0.0.1"
-#define KILO_TAB_STOP 8
-#define KILO_QUIT_TIMES 2
+#define SECURE_KILO_VERSION "0.0.1"
+#define SECURE_KILO_TAB_STOP 8
+#define SECURE_KILO_QUIT_TIMES 2
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -498,7 +499,7 @@ int editorRowCxToRx(struct erow* row, int cx) {
     int j;
     for (j = 0 ; j < cx ; j++) {
         if (row->chars[j] == '\t') {
-            rx += (KILO_TAB_STOP - 1) - (rx % KILO_TAB_STOP);
+            rx += (SECURE_KILO_TAB_STOP - 1) - (rx % SECURE_KILO_TAB_STOP);
         }
         rx++;
     }
@@ -512,7 +513,7 @@ int editorRowRxToCx(struct erow* row, int rx) {
     int cx;
     for (cx = 0 ; cx < row->size ; cx++) {
         if (row->chars[cx] == '\t') {
-            cur_rx += (KILO_TAB_STOP - 1) - (cur_rx % KILO_TAB_STOP);
+            cur_rx += (SECURE_KILO_TAB_STOP - 1) - (cur_rx % SECURE_KILO_TAB_STOP);
         }
         cur_rx++;
 
@@ -535,13 +536,13 @@ void editorUpdateRow(struct erow* row) {
     }
 
     free(row->render);
-    row->render = malloc(row->size + tabs * (KILO_TAB_STOP - 1) + 1);
+    row->render = malloc(row->size + tabs * (SECURE_KILO_TAB_STOP - 1) + 1);
 
     int idx = 0;
     for (j = 0 ; j < row->size ; j++) {
         if (row->chars[j] == '\t') {
             row->render[idx++] = ' ';
-            while (idx % KILO_TAB_STOP != 0) {
+            while (idx % SECURE_KILO_TAB_STOP != 0) {
                 row->render[idx++] = ' ';
             }
         } else {
@@ -927,7 +928,7 @@ void editorDrawRows(struct abuf* ab) {
             if (E.numrows == 0 && y == E.screenrows / 3) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome),
-                   "Kilo editor -- version %s %dx%d", KILO_VERSION,
+                   "Secure Kilo editor -- version %s %dx%d", SECURE_KILO_VERSION,
                     E.screencols, E.screenrows);
                 if (welcomelen > E.screencols) {
                     welcomelen = E.screencols;
@@ -1168,7 +1169,7 @@ void editorMoveCursor(int key) {
 
 
 void editorProcessKeypress() {
-    static int quit_times = KILO_QUIT_TIMES;
+    static int quit_times = SECURE_KILO_QUIT_TIMES;
 
     int c = editorReadKey();
 
@@ -1260,7 +1261,7 @@ void editorProcessKeypress() {
         }
     }
 
-    quit_times = KILO_QUIT_TIMES;
+    quit_times = SECURE_KILO_QUIT_TIMES;
 }
 
 
