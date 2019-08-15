@@ -1068,8 +1068,7 @@ void editorDrawRows(struct abuf* ab) {
             if (E.numrows == 0 && y == E.screenrows / 3) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome),
-                   "Secure Kilo editor -- version %s %dx%d", SECURE_KILO_VERSION,
-                    E.screencols, E.screenrows);
+                   "Secure Kilo editor -- version %s", SECURE_KILO_VERSION);
                 if (welcomelen > E.screencols) {
                     welcomelen = E.screencols;
                 }
@@ -1140,8 +1139,8 @@ void editorDrawStatusBar(struct abuf* ab) {
 
     char status[80];
     char rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
-        E.filename ? E.filename : "[No Name]", E.numrows,
+    int len = snprintf(status, sizeof(status), "%.20s - %d line%s %s",
+        E.filename ? E.filename : "[No Name]", E.numrows, E.numrows > 1 ? "s" : "",
         E.dirty ? "(modified)" : "");
     int rlen = snprintf(rstatus, sizeof(rstatus), "%s | %d/%d",
         E.syntax ? E.syntax->filetype : "no ft", E.cy + 1, E.numrows);
