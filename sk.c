@@ -721,63 +721,208 @@ char* editorRowsToString(int *buflen) {
 
 
 
-void editorOpen(char* filename) {
+/**
+ * Returns a file descriptor corresponding to the content
+ * of the given file after decryption by gpg, or dies if
+ * any error occurs. It does so by feeding the given file to
+ * gpg for decryption and redirects gpg's output to a pipe.
+ * The returned descripor is the read descriptor of the pipe.
+ */
+int openForSecureRead(char* filename) {
+    int p[2];
+    if (-1 == pipe(p)) {
+        die("pipe");
+    }
+
+    int pid = fork();
+    switch(pid) {
+        case -1: die("fork"); return -1;
+        case 0: {
+            // child
+            close(p[0]);
+
+            int in = open(filename, O_RDONLY);
+            if (-1 == in) {
+	            die("open");
+	            return -1;
+            }
+            if (-1 == dup2(in, 0)) {
+	            die("dup2");
+	            return -1;
+            }
+            if (-1 == dup2(p[1], 1)) {
+	            die("dup2");
+	            return -1;
+            }
+
+            execlp("gpg", "gpg", "-d", NULL);
+            die("execlp");
+            return -1;
+        }
+        default: {
+            // father
+            close(p[1]);
+            E.gpgpid = pid;
+            return p[0];
+        }
+    }
+}
+
+
+
+/**
+ * Same trick as openForSecureRead but for write.
+ */
+int openForSecureWrite(char* filename) {
+    int p[2];
+    if (-1 == pipe(p)) {
+        die("pipe");
+    }
+
+    int pid = fork();
+    switch(pid) {
+        case -1: die("fork"); return -1;
+        case 0: {
+            // child
+            close(p[1]);
+
+            if (-1 == dup2(p[0], 0)) {
+	            die("dup2");
+	            return -1;
+            }
+
+            execlp("gpg", "gpg", "-c", "--output", filename, NULL);
+            die("execlp");
+            return -1;
+        }
+        default: {
+            // father
+            close(p[0]);
+            E.gpgpid = pid;
+            return p[1];
+        }
+    }
+}
+
+
+
+void editorOpenSecure(char* filename) {
     free(E.filename);
     E.filename = strdup(filename);
 
     editorSelectSyntaxHighlight();
 
-    FILE* fp = fopen(filename, "r");
-    if (!fp) {
-        die("fopen");
-    }
+    int fd = openForSecureRead(filename);
 
-    char* line = NULL;
-    size_t linecap = 0;
-    ssize_t linelen;
+    int N = 4096;
+    char buf[N];
+    int n;
+    size_t linebuflen = N;
+    char* linebuf = (char*)malloc(linebuflen);
+    size_t curpos = 0;
+    while ((n = read(fd, buf, N)) > 0) {
+        for (int i = 0 ; i < n ; i++) {
+            if (curpos == linebuflen - 1) {
+                linebuflen *= 2;
+                linebuf = (char*)realloc(linebuf, linebuflen);
+            }
 
-    while (-1 != (linelen = getline(&line, &linecap, fp))) {
-        while (linelen > 0 && (line[linelen - 1] == '\r' || line[linelen - 1] == '\n')) {
-            linelen--;
+            if (buf[i] != '\n') {
+                linebuf[curpos++] = buf[i];
+                continue;
+            }
+
+            do {
+                linebuf[curpos--] = '\0';
+            } while (curpos >= 0 && linebuf[curpos] == '\r');
+
+            editorInsertRow(E.numrows, linebuf, curpos + 1);
+
+            curpos = 0;
         }
-        editorInsertRow(E.numrows, line, linelen);
     }
-    free(line);
-    fclose(fp);
+
+    free(linebuf);
+    close(fd);
     E.dirty = 0;
+
+    // Let's verify that the gpg process did not die with an error
+    int status;
+    waitpid(E.gpgpid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        dieWithMsg("Could not decrypt file '%s'\r\n", filename);
+    }
 }
 
 
 
-void editorSave() {
+void editorSaveSecure() {
+    char* output = NULL;
     if (E.filename == NULL) {
         E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL);
         if (E.filename == NULL) {
             editorSetStatusMessage("Save aborted");
             return;
         }
+        output = strdup(E.filename);
         editorSelectSyntaxHighlight();
     }
 
-    int len;
-    char* buf = editorRowsToString(&len);
+    int N;
+    char* buf = editorRowsToString(&N);
 
-    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
-    if (-1 != fd) {
-        if (-1 != ftruncate(fd, len)) {
-            if (len == write(fd, buf, len)) {
-                close(fd);
-                free(buf);
-                E.dirty = 0;
-                editorSetStatusMessage("%d bytes written to disk", len);
-                return;
-            }
-
-        }
-        close(fd);
+    if (output == NULL) {
+        output = malloc(strlen(E.filename) + 8);
+        sprintf(output, "%s.XXXXXX", E.filename);
+        mktemp(output);
     }
+
+    int fd = openForSecureWrite(output);
+
+    int len;
+    int written = 0;
+    while (written != N && -1 != (len = write(fd, buf + written, N - written))) {
+        written += len;
+    }
+
+    close(fd);
     free(buf);
-    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+
+    int status;
+    waitpid(E.gpgpid, &status, 0);
+
+    int success = WIFEXITED(status) && WEXITSTATUS(status) == 0 && written == N;
+
+    if (!success) {
+        free(output);
+        editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+        return;
+    }
+
+    struct stat ebuf;
+    if (-1 == stat(output, &ebuf)) {
+        free(output);
+        editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+        return;
+    }
+
+    if (strcmp(output, E.filename)) {
+        // We need to replace the original file with the one created
+        struct stat buf;
+        if (-1 == stat(E.filename, &buf)
+            || -1 == chmod(output, buf.st_mode)
+            || -1 == remove(E.filename)
+            || -1 == rename(output, E.filename)) {
+
+            free(output);
+            editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+            return;
+        }
+    }
+
+    free(output);
+    E.dirty = 0;
+    editorSetStatusMessage("%d data bytes encrypted into %d bytes written to disk", len, ebuf.st_size);
 }
 
 
@@ -1188,7 +1333,7 @@ void editorProcessKeypress() {
         }
 
         case CTRL_KEY('s'): {
-            editorSave();
+            editorSaveSecure();
             break;
         }
 
@@ -1292,7 +1437,7 @@ int main(int argc, char* argv[]) {
     initEditor();
 
     if (argc >= 2) {
-        editorOpen(argv[1]);
+        editorOpenSecure(argv[1]);
     }
 
     editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
