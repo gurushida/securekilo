@@ -754,8 +754,7 @@ int openForSecureRead(char* filename) {
 	            die("dup2");
 	            return -1;
             }
-
-            execlp("gpg", "gpg", "-d", NULL);
+            execlp("gpg", "gpg", "--no-symkey-cache", "-d", NULL);
             die("execlp");
             return -1;
         }
@@ -791,7 +790,7 @@ int openForSecureWrite(char* filename) {
 	            return -1;
             }
 
-            execlp("gpg", "gpg", "-c", "--output", filename, NULL);
+            execlp("gpg", "gpg", "--no-symkey-cache", "-c", "--output", filename, NULL);
             die("execlp");
             return -1;
         }
