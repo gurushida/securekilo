@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ncurses.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -292,18 +293,12 @@ int getCursorPosition(int *row, int *col) {
 
 
 int getWindowSize(int *rows, int *cols) {
-   struct winsize ws;
-
-    if (-1 == ioctl(STDOUT_FILENO, TIOCGWINSZ) && ws.ws_col == 0) {
-        if (12 != write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12)) {
-            getCursorPosition(rows, cols);
-            return -1;
-        }
-        return -1;
-    }
-
-    *rows = ws.ws_row;
-    *cols = ws.ws_col;
+    WINDOW* w = initscr();
+    *rows = LINES;
+    *cols = COLS;
+    delwin(w);
+    endwin();
+    refresh();
     return 0;
 }
 
