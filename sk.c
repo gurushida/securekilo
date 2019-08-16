@@ -151,9 +151,15 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int));
 
 
 
-void die(const char* s) {
+void cleanup() {
     write(STDOUT_FILENO, "\x1b[2J", 4);
     write(STDOUT_FILENO, "\x1b[H", 3);
+}
+
+
+
+void die(const char* s) {
+    cleanup();
 
     perror(s);
     exit(1);
@@ -162,8 +168,7 @@ void die(const char* s) {
 
 
 void dieWithMsg(const char* fmt, ...) {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    cleanup();
 
     va_list ap;
     va_start(ap, fmt);
@@ -1410,8 +1415,7 @@ void editorProcessKeypress() {
                 return;
             }
 
-            write(STDOUT_FILENO, "\x1b[2J", 4);
-            write(STDOUT_FILENO, "\x1b[H", 3);
+            cleanup();
             exit(0);
             break;
         }
