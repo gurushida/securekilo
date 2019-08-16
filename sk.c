@@ -747,14 +747,28 @@ int openForSecureRead(char* filename) {
 	            die("open");
 	            return -1;
             }
+
             if (-1 == dup2(in, 0)) {
 	            die("dup2");
 	            return -1;
             }
+
             if (-1 == dup2(p[1], 1)) {
 	            die("dup2");
 	            return -1;
             }
+
+            int devNull = open("/dev/null", O_WRONLY);
+            if (devNull == -1) {
+                die("open");
+                return -1;
+            }
+
+            if (-1 == dup2(devNull, 2)) {
+	            die("dup2");
+	            return -1;
+            }
+
             putenv(E.gpgtty);
             execlp("gpg", "gpg", "--no-symkey-cache", "-d", NULL);
             die("execlp");
@@ -791,6 +805,18 @@ int openForSecureWrite(char* filename) {
 	            die("dup2");
 	            return -1;
             }
+
+            int devNull = open("/dev/null", O_WRONLY);
+            if (devNull == -1) {
+                die("open");
+                return -1;
+            }
+
+            if (-1 == dup2(devNull, 2)) {
+	            die("dup2");
+	            return -1;
+            }
+
             putenv(E.gpgtty);
             execlp("gpg", "gpg", "--no-symkey-cache", "-c", "--output", filename, NULL);
             die("execlp");
