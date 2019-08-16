@@ -31,19 +31,7 @@
 #define SECURE_KILO_QUIT_TIMES 2
 
 #define CTRL_KEY(k) ((k) & 0x1f)
-
-enum EDITOR_KEY {
-    BACKSPACE = 127,
-    ARROW_LEFT = 1000,
-    ARROW_RIGHT,
-    ARROW_UP,
-    ARROW_DOWN,
-    DEL_KEY,
-    HOME_KEY,
-    END_KEY,
-    PAGE_UP,
-    PAGE_DOWN
-};
+#define KEY_ESC ('\x1b')
 
 enum editorHighlight {
     HL_NORMAL = 0,
@@ -103,7 +91,7 @@ struct editorConfig {
     char statusmsg[80];
     time_t statusmsg_time;
     struct editorSyntax* syntax;
-    struct termios orig_termios;
+    WINDOW* window;
 };
 struct editorConfig E;
 
@@ -151,9 +139,37 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int));
 
 
 
+void initWindow() {
+    E.window = initscr();
+    raw();
+    noecho();
+    keypad(E.window, true);
+}
+
+
+
 void cleanup() {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    delwin(E.window);
+    endwin();
+}
+
+
+
+/**
+ * Leaves ncurses mode temporarily. This is needed
+ * when we are about to run another process that
+ * will use stdin and output things in the terminal.
+ */
+void leaveNcursesModeTemporarily() {
+    def_prog_mode();
+    endwin();
+}
+
+
+
+void restoreNcursesMode() {
+    reset_prog_mode();
+    refresh();
 }
 
 
@@ -176,136 +192,6 @@ void dieWithMsg(const char* fmt, ...) {
     va_end(ap);
 
     exit(1);
-}
-
-
-
-void disableRawMode() {
-    if (-1 == tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios)) {
-        die("tcsetattr");
-    }
-}
-
-
-
-void enableRawMode() {
-    if (-1 == tcgetattr(STDIN_FILENO, &E.orig_termios)) {
-        die("tcgetattr");
-    }
-    atexit(disableRawMode);
-
-    struct termios raw = E.orig_termios;
-    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-    raw.c_oflag &= ~(OPOST);
-    raw.c_cflag |= (CS8);
-    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 1;
-
-    if (-1 == tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)) {
-        die("tcsetattr");
-    }
-}
-
-
-
-int editorReadKey() {
-    int nread;
-    char c;
-    while (1 != (nread = read(STDIN_FILENO, &c, 1))) {
-        if (-1 == nread && errno != EAGAIN) {
-            die("read");
-        }
-    }
-
-    if (c == '\x1b') {
-        char seq[3];
-
-        if (1 != read(STDIN_FILENO, &seq[0], 1)) {
-            return '\x1b';
-        }
-        if (1 != read(STDIN_FILENO, &seq[1], 1)) {
-            return '\x1b';
-        }
-
-        if (seq[0] == '[') {
-            if (seq[1] >= '0' && seq[1] <= '9') {
-                if (1 != read(STDIN_FILENO, &seq[2], 1)) {
-                    return '\x1b';
-                }
-                if (seq[2] == '~') {
-                    switch (seq[1]) {
-                        case '1': return HOME_KEY;
-                        case '3': return DEL_KEY;
-                        case '4': return END_KEY;
-                        case '5': return PAGE_UP;
-                        case '6': return PAGE_DOWN;
-                        case '7': return HOME_KEY;
-                        case '8': return END_KEY;
-                    }
-                }
-
-            } else {
-                switch(seq[1]) {
-                    case 'A': return ARROW_UP;
-                    case 'B': return ARROW_DOWN;
-                    case 'C': return ARROW_RIGHT;
-                    case 'D': return ARROW_LEFT;
-                    case 'E': return HOME_KEY;
-                    case 'F': return END_KEY;
-                }
-            }
-        } else if (seq[0] == 'O') {
-            switch(seq[1]) {
-                case 'H': return HOME_KEY;
-                case 'F': return END_KEY;
-            }
-        }
-        return '\x1b';
-    }
-
-    return c;
-}
-
-
-
-int getCursorPosition(int *row, int *col) {
-    char buf[32];
-    unsigned int i = 0;
-    if (4 != write(STDOUT_FILENO, "\x1b[6n", 4)) {
-        return -1;
-    }
-
-    printf("\r\n");
-    while (i < sizeof(buf) - 1) {
-        if (1 != read(STDIN_FILENO, &buf[i], 1)) {
-            break;
-        }
-        if (buf[i] == 'R') {
-            break;
-        }
-        i++;
-    }
-    buf[i] = '\0';
-    if (buf[0] != '\x1b' || buf[1] != '[') {
-        return -1;
-    }
-    if (2 != sscanf(&buf[2], "%d;%d", row, col)) {
-        return -1;
-    }
-    return 0;
-}
-
-
-
-int getWindowSize(int *rows, int *cols) {
-    WINDOW* w = initscr();
-    *rows = LINES;
-    *cols = COLS;
-    delwin(w);
-    endwin();
-    refresh();
-    return 0;
 }
 
 
@@ -470,7 +356,7 @@ void editorSelectSyntaxHighlight() {
         struct editorSyntax* s = &HLDB[j];
         unsigned int i = 0;
 
-        editorSetStatusMessage("ZZZ match %s", s->filematch[i]);
+        editorSetStatusMessage("match %s", s->filematch[i]);
         while (s->filematch[i]) {
             int is_ext = (s->filematch[i][0] == '.');
             if ((is_ext && ext && !strcmp(ext, s->filematch[i])) ||
@@ -844,6 +730,8 @@ void editorOpenSecure(char* filename) {
 
     editorSelectSyntaxHighlight();
 
+    leaveNcursesModeTemporarily();
+
     int fd = openForSecureRead(filename);
 
     int N = 4096;
@@ -884,6 +772,8 @@ void editorOpenSecure(char* filename) {
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         dieWithMsg("Could not decrypt file '%s'\r\n", filename);
     }
+
+    restoreNcursesMode();
 }
 
 
@@ -909,6 +799,8 @@ void editorSaveSecure() {
         mktemp(output);
     }
 
+    leaveNcursesModeTemporarily();
+
     int fd = openForSecureWrite(output);
 
     int len;
@@ -924,6 +816,7 @@ void editorSaveSecure() {
     waitpid(E.gpgpid, &status, 0);
 
     int success = WIFEXITED(status) && WEXITSTATUS(status) == 0 && written == N;
+    restoreNcursesMode();
 
     if (!success) {
         free(output);
@@ -1032,13 +925,13 @@ void editorFindCallback(char* query, int key) {
         memcpy(E.rows[saved_hl_line].hl, saved_hl, E.rows[saved_hl_line].rsize);
     }
 
-    if (key == '\r' || key == '\x1b') {
+    if (key == '\n' || key == KEY_ESC) {
         last_match = -1;
         direction = 1;
         return;
-    } else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+    } else if (key == KEY_RIGHT || key == KEY_DOWN) {
         direction = 1;
-    } else if (key == ARROW_LEFT || key == ARROW_UP) {
+    } else if (key == KEY_LEFT || key == KEY_UP) {
         direction = -1;
     } else {
         last_match = -1;
@@ -1316,19 +1209,19 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int)) {
         editorSetStatusMessage(prompt, buf);
         editorRefreshScreen();
 
-        int c = editorReadKey();
-        if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
+        int c = getch();
+        if (c == KEY_DC || c == CTRL_KEY('h') || c == KEY_BACKSPACE) {
             if (buflen > 0) {
                 buf[--buflen] = '\0';
             }
-        } else if (c == '\x1b') {
+        } else if (c == KEY_ESC) {
             editorSetStatusMessage("");
             if (callback) {
                 callback(buf, c);
             }
             free(buf);
             return NULL;
-        } else if (c == '\r') {
+        } else if (c == '\n') {
             if (buflen != 0) {
                 editorSetStatusMessage("");
                 if (callback) {
@@ -1356,7 +1249,7 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int)) {
 void editorMoveCursor(int key) {
     struct erow* row = (E.cy >= E.numrows) ? NULL : &E.rows[E.cy];
     switch(key) {
-        case ARROW_LEFT: {
+        case KEY_LEFT: {
             if (E.cx != 0) {
                 E.cx--;
             } else if (E.cy > 0) {
@@ -1365,7 +1258,7 @@ void editorMoveCursor(int key) {
             }
             break;
         }
-        case ARROW_RIGHT: {
+        case KEY_RIGHT: {
             if (row && E.cx < row -> size) {
                 E.cx++;                
             } else if (row && E.cx == row->size) {
@@ -1374,13 +1267,13 @@ void editorMoveCursor(int key) {
             }
             break;
         }
-        case ARROW_UP: {
+        case KEY_UP: {
             if (E.cy != 0) {
                 E.cy--;
             }
             break;
         }
-        case ARROW_DOWN: {
+        case KEY_DOWN: {
             if (E.cy < E.numrows) {
                 E.cy++;
             }
@@ -1400,13 +1293,14 @@ void editorMoveCursor(int key) {
 void editorProcessKeypress() {
     static int quit_times = SECURE_KILO_QUIT_TIMES;
 
-    int c = editorReadKey();
+    int c = getch();
 
     switch(c) {
-        case '\r': {
+        case '\n': {
             editorInsertNewLine();
             break;
         }
+
         case CTRL_KEY('q'): {
             if (E.dirty && quit_times > 0) {
                 editorSetStatusMessage("WARNING!!! File has unsaved changes. "
@@ -1425,12 +1319,12 @@ void editorProcessKeypress() {
             break;
         }
 
-        case HOME_KEY: {
+        case KEY_HOME: {
             E.cx = 0;
             break;
         }
 
-        case END_KEY: {
+        case KEY_END: {
             if (E.cy < E.numrows) {
                 E.cx = E.rows[E.cy].size;
             }
@@ -1442,19 +1336,19 @@ void editorProcessKeypress() {
             break;
         }
 
-        case BACKSPACE:
+        case KEY_BACKSPACE:
         case CTRL_KEY('h'):
-        case DEL_KEY: {
-            if (c == DEL_KEY) {
-                editorMoveCursor(ARROW_RIGHT);
+        case KEY_DC: {
+            if (c == KEY_DC) {
+                editorMoveCursor(KEY_RIGHT);
             }
             editorDelChar();
             break;
         }
 
-        case PAGE_UP:
-        case PAGE_DOWN: {
-            if (c == PAGE_UP) {
+        case KEY_PPAGE:
+        case KEY_NPAGE: {
+            if (c == KEY_PPAGE) {
                 E.cy = E.rowoff;
             } else {
                 E.cy = E.rowoff + E.screenrows - 1;
@@ -1465,21 +1359,21 @@ void editorProcessKeypress() {
 
             int times = E.screenrows;
             while (times--) {
-                editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+                editorMoveCursor(c == KEY_PPAGE ? KEY_UP : KEY_DOWN);
             }
             break;
         }
 
-        case ARROW_UP:
-        case ARROW_DOWN:
-        case ARROW_LEFT:
-        case ARROW_RIGHT: {
+        case KEY_UP:
+        case KEY_DOWN:
+        case KEY_LEFT:
+        case KEY_RIGHT: {
             editorMoveCursor(c);
             break;
         }
 
         case CTRL_KEY('l'):
-        case '\x1b': {
+        case KEY_ESC: {
             break;
         }
 
@@ -1512,17 +1406,15 @@ void initEditor() {
     E.statusmsg_time = 0;
     E.syntax = NULL;
 
-    if (-1 == getWindowSize(&E.screenrows, &E.screencols)) {
-        die("getWindowSize");
-    }
-    E.screenrows -= 2;
+    E.screenrows = LINES - 2;
+    E.screencols = COLS;
 }
 
 
 
 int main(int argc, char* argv[]) {
     getTTY();
-    enableRawMode();
+    initWindow();
     initEditor();
 
     if (argc >= 2) {
