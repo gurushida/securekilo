@@ -1049,8 +1049,8 @@ void editorDrawRows() {
     for (y = 0 ; y < E.screenrows; y++) {
         int filerow = y + E.rowoff;
         int x = 0;
-        colorOn(HL_NORMAL);
         if (filerow >= E.numrows) {
+            colorOn(HL_NORMAL);
             if (E.numrows == 0 && y == E.screenrows / 3) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome),
@@ -1072,7 +1072,7 @@ void editorDrawRows() {
                 mvprintw(y, 0, "~");
                 clrtoeol();
             }
-        colorOff(HL_NORMAL);
+            colorOff(HL_NORMAL);
         } else {
             int len = E.rows[filerow].rsize - E.coloff;
             if (len < 0) {
