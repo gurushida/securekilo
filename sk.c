@@ -165,6 +165,13 @@ void initWindow() {
 
 
 
+void getWindowSize() {
+    E.screenrows = LINES - 2;
+    E.screencols = COLS;
+}
+
+
+
 void cleanup() {
     delwin(E.window);
     endwin();
@@ -1155,6 +1162,7 @@ void editorDrawMessageBar() {
 
 
 void editorRefreshScreen() {
+    getWindowSize();
     editorScroll();
 
     editorDrawRows();
@@ -1196,7 +1204,9 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int)) {
         editorRefreshScreen();
 
         int c = getch();
-        if (c == KEY_DC || c == CTRL_KEY('h') || c == KEY_BACKSPACE || c == BACKSPACE) {
+        if (c == KEY_RESIZE) {
+            continue;
+        } else if (c == KEY_DC || c == CTRL_KEY('h') || c == KEY_BACKSPACE || c == BACKSPACE) {
             if (buflen > 0) {
                 buf[--buflen] = '\0';
             }
@@ -1282,6 +1292,13 @@ void editorProcessKeypress() {
     int c = getch();
 
     switch(c) {
+        // Don't try to add characters when the value returned by getch()
+        // is indicating that a resize operation has occurred on the terminal
+        case -1:
+        case KEY_RESIZE: {
+            break;
+        }
+
         case '\n': {
             editorInsertNewLine();
             break;
@@ -1393,8 +1410,7 @@ void initEditor() {
     E.statusmsg_time = 0;
     E.syntax = NULL;
 
-    E.screenrows = LINES - 2;
-    E.screencols = COLS;
+    getWindowSize();
 }
 
 
