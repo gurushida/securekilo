@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <locale.h>
 #include <ncurses.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -19,6 +20,8 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
+#include <xlocale.h>
 
 
 
@@ -47,6 +50,7 @@ enum editorHighlight {
 
 #define HL_HIGHLIGHT_NUMBERS (1 << 0)
 #define HL_HIGHLIGHT_STRINGS (1 << 1)
+#define MAX_BYTES_UTF8 4
 
 
 
@@ -57,10 +61,10 @@ enum editorHighlight {
 struct editorSyntax {
     char* filetype;
     char** filematch;
-    char** keywords;
-    char* singleline_comment_start;
-    char* multiline_comment_start;
-    char* multiline_comment_end;
+    wchar_t** keywords;
+    wchar_t* singleline_comment_start;
+    wchar_t* multiline_comment_start;
+    wchar_t* multiline_comment_end;
     int flags;
 };
 
@@ -70,8 +74,8 @@ struct erow {
     int idx;
     int size;
     int rsize;
-    char* chars;
-    char* render;
+    wchar_t* chars;
+    wchar_t* render;
     unsigned char* hl;
     int hl_open_comment;
 };
@@ -93,6 +97,8 @@ struct editorConfig {
     time_t statusmsg_time;
     struct editorSyntax* syntax;
     WINDOW* window;
+    char buf[MAX_BYTES_UTF8];
+    int buflen;
 };
 struct editorConfig E;
 
@@ -104,12 +110,12 @@ struct editorConfig E;
 
 char* C_HL_EXTENSIONS[] = { ".c", ".h", ".cpp", NULL };
 
-char* C_HL_KEYWORDS[] = {
-    "switch", "if", "while", "for", "break", "continue", "return", "else",
-    "struct", "union", "typedef", "static", "enum", "class", "case",
+wchar_t* C_HL_KEYWORDS[] = {
+    L"switch", L"if", L"while", L"for", L"break", L"continue", L"return", L"else",
+    L"struct", L"union", L"typedef", L"static", L"enum", L"class", L"case",
 
-    "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|",
-    "void|", NULL
+    L"int|", L"long|", L"double|", L"float|", L"char|", L"unsigned|", L"signed|",
+    L"void|", NULL
 };
 
 struct editorSyntax HLDB[] = {
@@ -117,7 +123,7 @@ struct editorSyntax HLDB[] = {
         "c",
         C_HL_EXTENSIONS,
         C_HL_KEYWORDS,
-        "//", "/*", "*/",
+        L"//", L"/*", L"*/",
         HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
     }
 };
@@ -132,7 +138,7 @@ struct editorSyntax HLDB[] = {
 
 void editorSetStatusMessage(const char* fmt, ...);
 void editorRefreshScreen();
-char* editorPrompt(char* prompt, void (*callback)(char*, int));
+wchar_t* editorPrompt(char* prompt, void (*callback)(wchar_t*, int));
 
 
 
@@ -240,12 +246,68 @@ void dieWithMsg(const char* fmt, ...) {
 
 
 
+/************************************ wide characters ************************************/
+
+
+
+/**
+ * Taken from man page of mbrlen.
+ *
+ * Returns the number of wide characters represented by the given
+ * multibyte character string.
+ */
+size_t nchars(const char *s) {
+    size_t charlen, chars;
+    mbstate_t mbs;
+
+    chars = 0;
+    memset(&mbs, 0, sizeof(mbs));
+    while ((charlen = mbrlen(s, MB_CUR_MAX, &mbs)) != 0 &&
+            charlen != (size_t)-1 && charlen != (size_t)-2) {
+        s += charlen;
+        chars++;
+    }
+
+    return (chars);
+}
+
+
+/**
+ * Returns the number of bytes needed to convert the given
+ * wide character string into a multibyte character string,
+ * excluding the terminating NULL character.
+ */
+size_t nbytes(wchar_t* s) {
+    char buf[32];
+    int n = 0;
+    while (*s != '\0') {
+        n += wctomb(buf, *s);
+        s++;
+    }
+    return n;
+}
+
+
+
+char* wc_to_mb(wchar_t* src) {
+    if (src == NULL) {
+        return NULL;
+    }
+    int n = nbytes(src);
+    char* buf = (char*)malloc(n + 1);
+    wcstombs(buf, src, wcslen(src));
+    return buf;
+}
+
+
+
+
 /************************************ syntax highlighting ************************************/
 
 
 
 int is_separator(int c) {
-    return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+    return iswspace(c) || c == L'\0' || wcschr(L",.()+-/*=~%<>[];", c) != NULL;
 }
 
 
@@ -258,15 +320,15 @@ void editorUpdateSyntax(struct erow* row) {
         return;
     }
 
-    char** keywords = E.syntax->keywords;
+    wchar_t** keywords = E.syntax->keywords;
 
-    char* scs = E.syntax->singleline_comment_start;
-    char* mcs = E.syntax->multiline_comment_start;
-    char* mce = E.syntax->multiline_comment_end;
+    wchar_t* scs = E.syntax->singleline_comment_start;
+    wchar_t* mcs = E.syntax->multiline_comment_start;
+    wchar_t* mce = E.syntax->multiline_comment_end;
 
-    int scs_len = scs ? strlen(scs) : 0;
-    int mcs_len = scs ? strlen(mcs) : 0;
-    int mce_len = scs ? strlen(mce) : 0;
+    int scs_len = scs ? wcslen(scs) : 0;
+    int mcs_len = scs ? wcslen(mcs) : 0;
+    int mce_len = scs ? wcslen(mce) : 0;
 
     int prev_sep = 1;
     int in_string = 0;
@@ -274,11 +336,11 @@ void editorUpdateSyntax(struct erow* row) {
 
     int i = 0;
     while (i < row -> rsize) {
-        char c = row->render[i];
+        wchar_t c = row->render[i];
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
 
         if (scs_len && !in_string && !in_comment) {
-            if (!strncmp(&row->render[i], scs, scs_len)) {
+            if (!wcsncmp(&row->render[i], scs, scs_len)) {
                 memset(&row->hl[i], HL_COMMENT, row->rsize - i);
             }
         }
@@ -286,7 +348,7 @@ void editorUpdateSyntax(struct erow* row) {
         if (mcs_len && mce_len && !in_string) {
             if (in_comment) {
                 row->hl[i] = HL_MLCOMMENT;
-                if (!strncmp(&row->render[i], mce, mce_len)) {
+                if (!wcsncmp(&row->render[i], mce, mce_len)) {
                     memset(&row->hl[i], HL_MLCOMMENT, mce_len);
                     i += mce_len;
                     in_comment = 0;
@@ -296,7 +358,7 @@ void editorUpdateSyntax(struct erow* row) {
                     i++;
                     continue;
                 }
-            } else if (!strncmp(&row->render[i], mcs, mcs_len)) {
+            } else if (!wcsncmp(&row->render[i], mcs, mcs_len)) {
                 memset(&row->hl[i], HL_MLCOMMENT, mcs_len);
                 i += mcs_len;
                 in_comment = 1;
@@ -307,7 +369,7 @@ void editorUpdateSyntax(struct erow* row) {
         if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
             if (in_string) {
                 row->hl[i] = HL_STRING;
-                if (c == '\\' && i + 1 < row->rsize) {
+                if (c == L'\\' && i + 1 < row->rsize) {
                     row->hl[i + 1] = HL_STRING;
                     i += 2;
                     continue;
@@ -319,7 +381,7 @@ void editorUpdateSyntax(struct erow* row) {
                 prev_sep = 1;
                 continue;
             } else {
-                if (c == '"' || c == '\'') {
+                if (c == L'"' || c == L'\'') {
                     in_string = c;
                     row->hl[i] = HL_STRING;
                     i++;
@@ -329,7 +391,7 @@ void editorUpdateSyntax(struct erow* row) {
         }
 
         if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
-            if ((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) ||
+            if ((iswdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) ||
                 (c == '.' && prev_hl == HL_NUMBER)) {
                 row->hl[i] = HL_NUMBER;
                 i++;
@@ -341,13 +403,13 @@ void editorUpdateSyntax(struct erow* row) {
         if (prev_sep) {
             int j;
             for (j = 0 ; keywords[j] ; j++) {
-                int klen = strlen(keywords[j]);
-                int kw2 = keywords[j][klen - 1] == '|';
+                int klen = wcslen(keywords[j]);
+                int kw2 = keywords[j][klen - 1] == L'|';
                 if (kw2) {
                     klen--;
                 }
 
-                if (!strncmp(&row->render[i], keywords[j], klen) &&
+                if (!wcsncmp(&row->render[i], keywords[j], klen) &&
                     is_separator(row->render[i + klen])) {
                     memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, klen);
                     i += klen;
@@ -414,7 +476,7 @@ int editorRowCxToRx(struct erow* row, int cx) {
     int rx = 0;
     int j;
     for (j = 0 ; j < cx ; j++) {
-        if (row->chars[j] == '\t') {
+        if (row->chars[j] == L'\t') {
             rx += (SECURE_KILO_TAB_STOP - 1) - (rx % SECURE_KILO_TAB_STOP);
         }
         rx++;
@@ -428,7 +490,7 @@ int editorRowRxToCx(struct erow* row, int rx) {
     int cur_rx = 0;
     int cx;
     for (cx = 0 ; cx < row->size ; cx++) {
-        if (row->chars[cx] == '\t') {
+        if (row->chars[cx] == L'\t') {
             cur_rx += (SECURE_KILO_TAB_STOP - 1) - (cur_rx % SECURE_KILO_TAB_STOP);
         }
         cur_rx++;
@@ -446,26 +508,26 @@ void editorUpdateRow(struct erow* row) {
     int tabs = 0;
     int j;
     for (j = 0 ; j < row->size ; j++) {
-        if (row->chars[j] == '\t') {
+        if (row->chars[j] == L'\t') {
             tabs++;
         }
     }
 
     free(row->render);
-    row->render = malloc(row->size + tabs * (SECURE_KILO_TAB_STOP - 1) + 1);
+    row->render = malloc(sizeof(wchar_t) * (row->size + tabs * (SECURE_KILO_TAB_STOP - 1) + 1));
 
     int idx = 0;
     for (j = 0 ; j < row->size ; j++) {
-        if (row->chars[j] == '\t') {
+        if (row->chars[j] == L'\t') {
             row->render[idx++] = ' ';
             while (idx % SECURE_KILO_TAB_STOP != 0) {
-                row->render[idx++] = ' ';
+                row->render[idx++] = L' ';
             }
         } else {
             row->render[idx++] = row->chars[j];
         }
     }
-    row->render[idx] = '\0';
+    row->render[idx] = L'\0';
     row->rsize = idx;
 
     editorUpdateSyntax(row);
@@ -473,7 +535,7 @@ void editorUpdateRow(struct erow* row) {
 
 
 
-void editorInsertRow(int at, char* s, size_t len) {
+void editorInsertRow(int at, wchar_t* s, size_t len) {
     if (at < 0 || at > E.numrows) {
         return;
     }
@@ -487,9 +549,7 @@ void editorInsertRow(int at, char* s, size_t len) {
     E.rows[at].idx = at;
 
     E.rows[at].size = len;
-    E.rows[at].chars = malloc(len + 1);
-    memcpy(E.rows[at].chars, s, len);
-    E.rows[at].chars[len] = '\0';
+    E.rows[at].chars = wcsdup(s);
 
     E.rows[at].rsize = 0;
     E.rows[at].render = NULL;
@@ -526,12 +586,12 @@ void editorDelRow(int at) {
 
 
 
-void editorRowInsertChar(struct erow* row, int at, int c) {
+void editorRowInsertChar(struct erow* row, int at, wchar_t c) {
     if (at < 0 || at > row->size) {
         at = row->size;
     }
-    row->chars = realloc(row->chars, row->size + 2);
-    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
+    row->chars = realloc(row->chars, sizeof(wchar_t) * (row->size + 2));
+    wmemmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
     row->size++;
     row->chars[at] = c;
     editorUpdateRow(row);
@@ -540,11 +600,11 @@ void editorRowInsertChar(struct erow* row, int at, int c) {
 
 
 
-void editorRowAppendString(struct erow* row, char* s, size_t len) {
-    row->chars = realloc(row->chars, row->size + len + 1);
-    memcpy(&row->chars[row->size], s ,len);
+void editorRowAppendString(struct erow* row, wchar_t* s, size_t len) {
+    row->chars = realloc(row->chars, sizeof(wchar_t) * (row->size + len + 1));
+    wmemcpy(&row->chars[row->size], s, len);
     row->size += len;
-    row->chars[row->size] = '\0';
+    row->chars[row->size] = L'\0';
     editorUpdateRow(row);
     E.dirty++;
 }
@@ -555,7 +615,7 @@ void editorRowDelChar(struct erow* row, int at) {
     if (at < 0 || at >= row->size) {
         return;
     }
-    memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
+    wmemmove(&row->chars[at], &row->chars[at + 1], row->size - at);
     row->size--;
     editorUpdateRow(row);
     E.dirty++;
@@ -567,9 +627,9 @@ void editorRowDelChar(struct erow* row, int at) {
 
 
 
-void editorInsertChar(int c) {
+void editorInsertChar(wchar_t c) {
     if (E.cy == E.numrows) {
-        editorInsertRow(E.numrows, "", 0);
+        editorInsertRow(E.numrows, L"", 0);
     }
     editorRowInsertChar(&E.rows[E.cy], E.cx, c);
     E.cx++;
@@ -579,13 +639,13 @@ void editorInsertChar(int c) {
 
 void editorInsertNewLine() {
     if (E.cx == 0) {
-        editorInsertRow(E.cy, "", 0);
+        editorInsertRow(E.cy, L"", 0);
     } else {
         struct erow* row = &E.rows[E.cy];
         editorInsertRow(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
         row = &E.rows[E.cy];
         row->size = E.cx;
-        row->chars[row->size] = '\0';
+        row->chars[row->size] = L'\0';
         editorUpdateRow(row);
     }
     E.cy++;
@@ -619,18 +679,25 @@ void editorDelChar() {
 
 char* editorRowsToString(int *buflen) {
     int totlen = 0;
-    int j;
+    int i, j;
+    char tmp[MAX_BYTES_UTF8];
     for (j = 0 ; j < E.numrows ; j++) {
-        totlen += E.rows[j].size + 1;
+        for (i = 0 ; i < E.rows[j].size ; i++) {
+            totlen += wctomb(tmp, E.rows[j].chars[i]);
+        }
+        totlen++;
     }
     *buflen = totlen;
 
     char* buf = malloc(totlen);
     char* p = buf;
     for (j = 0 ; j < E.numrows ; j++) {
-        memcpy(p, E.rows[j].chars, E.rows[j].size);
-        p += E.rows[j].size;
-        *p = '\n';
+        for (i = 0 ; i < E.rows[j].size ; i++) {
+            int n = wctomb(p, E.rows[j].chars[i]);
+            p += n;
+        }
+
+        *p = L'\n';
         p++;
     }
     return buf;
@@ -753,6 +820,7 @@ int openForSecureWrite(char* filename) {
 
 
 
+
 void editorOpenSecure(char* filename) {
     free(E.filename);
     E.filename = strdup(filename);
@@ -762,12 +830,13 @@ void editorOpenSecure(char* filename) {
     leaveNcursesModeTemporarily();
 
     int fd = openForSecureRead(filename);
-
     int N = 4096;
     char buf[N];
     int n;
     size_t linebuflen = N;
     char* linebuf = (char*)malloc(linebuflen);
+    size_t wbuflen = N;
+    wchar_t* wbuf = (wchar_t*)malloc(wbuflen);
     size_t curpos = 0;
     while ((n = read(fd, buf, N)) > 0) {
         for (int i = 0 ; i < n ; i++) {
@@ -785,8 +854,16 @@ void editorOpenSecure(char* filename) {
                 linebuf[curpos--] = '\0';
             } while (curpos >= 0 && linebuf[curpos] == '\r');
 
-            editorInsertRow(E.numrows, linebuf, curpos + 1);
 
+            size_t nwchars = nchars(linebuf);
+            if (nwchars + 1 > wbuflen) {
+                wbuflen = nwchars + 1;
+                wbuf = (wchar_t*)realloc(wbuf, sizeof(wchar_t) * wbuflen);
+            }
+            mbstowcs(wbuf, linebuf, nwchars);
+            wbuf[nwchars] = L'\0';
+
+            editorInsertRow(E.numrows, wbuf, nwchars);
             curpos = 0;
         }
     }
@@ -810,7 +887,10 @@ void editorOpenSecure(char* filename) {
 void editorSaveSecure() {
     char* output = NULL;
     if (E.filename == NULL) {
-        E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL);
+        wchar_t* wname = editorPrompt("Save as: %s (ESC to cancel)", NULL);
+        E.filename = wc_to_mb(wname);
+        free(wname);
+
         if (E.filename == NULL) {
             editorSetStatusMessage("Save aborted");
             return;
@@ -821,6 +901,7 @@ void editorSaveSecure() {
 
     int N;
     char* buf = editorRowsToString(&N);
+
 
     if (output == NULL) {
         output = malloc(strlen(E.filename) + 8);
@@ -943,7 +1024,7 @@ void getTTY() {
 
 
 
-void editorFindCallback(char* query, int key) {
+void editorFindCallback(wchar_t* query, int key) {
     static int last_match = -1;
     static int direction = 1;
 
@@ -981,7 +1062,7 @@ void editorFindCallback(char* query, int key) {
         }
 
         struct erow* row = &E.rows[current];
-        char* match = strstr(row->render, query);
+        wchar_t* match = wcsstr(row->render, query);
         if (match) {
             last_match = current;
             E.cy = current;
@@ -991,7 +1072,7 @@ void editorFindCallback(char* query, int key) {
             saved_hl_line = current;
             saved_hl = malloc(row->size);
             memcpy(saved_hl, row->hl, row->rsize);
-            memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
+            memset(&row->hl[match - row->render], HL_MATCH, wcslen(query));
             break;
         }
     }
@@ -1005,7 +1086,7 @@ void editorFind() {
     int saved_coloff = E.coloff;
     int saved_rowoff = E.rowoff;
 
-    char* query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback);
+    wchar_t* query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback);
     if (query) {
         free(query);
     } else {
@@ -1081,7 +1162,7 @@ void editorDrawRows() {
             if (len > E.screencols) {
                 len = E.screencols;
             }
-            char* c = &E.rows[filerow].render[E.coloff];
+            wchar_t* c = &E.rows[filerow].render[E.coloff];
             unsigned char* hl = &E.rows[filerow].hl[E.coloff];
             int current_color = HL_NORMAL;
             colorOn(current_color);
@@ -1093,12 +1174,13 @@ void editorDrawRows() {
                     current_color = hl[j];
                     colorOn(current_color);
                 }
+                wchar_t ch;
                 if (iscntrl(c[j])) {
-                    char sym = (c[j] <= 26) ? '@' + c[j] : '?';
-                    mvaddch(y, x++, sym);
+                    ch = (c[j] <= 26) ? '@' + c[j] : '?';
                 } else {
-                    mvaddch(y, x++, c[j]);
+                    ch = c[j];
                 }
+                mvprintw(y, x++, "%lc", ch);
             }
             clrtoeol();
         }
@@ -1192,23 +1274,24 @@ void editorSetStatusMessage(const char* fmt, ...) {
 
 
 
-char* editorPrompt(char* prompt, void (*callback)(char*, int)) {
+wchar_t* editorPrompt(char* prompt, void (*callback)(wchar_t*, int)) {
     size_t bufsize = 128;
-    char* buf = malloc(bufsize);
+    wchar_t* buf = (wchar_t*)malloc(sizeof(wchar_t) * bufsize);
 
     size_t buflen = 0;
-    buf[0] = '\0';
+    buf[0] = L'\0';
 
     while (1) {
         editorSetStatusMessage(prompt, buf);
         editorRefreshScreen();
 
         int c = getch();
+
         if (c == KEY_RESIZE) {
             continue;
         } else if (c == KEY_DC || c == CTRL_KEY('h') || c == KEY_BACKSPACE || c == BACKSPACE) {
             if (buflen > 0) {
-                buf[--buflen] = '\0';
+                buf[--buflen] = L'\0';
             }
         } else if (c == KEY_ESC) {
             editorSetStatusMessage("");
@@ -1228,10 +1311,10 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int)) {
         } else if (!iscntrl(c) && c < 128) {
             if (buflen == bufsize - 1) {
                 bufsize *= 2;
-                buf = realloc(buf, bufsize);
+                buf = realloc(buf, sizeof(wchar_t) * bufsize);
             }
             buf[buflen++] = c;
-            buf[buflen] = '\0';
+            buf[buflen] = L'\0';
         }
 
         if (callback) {
@@ -1284,6 +1367,21 @@ void editorMoveCursor(int key) {
     } 
 }
 
+
+
+void handleByte(int c) {
+    E.buf[E.buflen++] = c;
+
+    wchar_t wc = 0;
+    mbtowc(&wc, NULL, 0);
+    int res = mbtowc(&wc, E.buf, E.buflen);
+    if (res > 0) {
+        E.buflen = 0;
+        editorInsertChar(wc);
+    } else if (E.buflen == MAX_BYTES_UTF8 - 1) {
+        E.buflen = 0;
+    }
+}
 
 
 void editorProcessKeypress() {
@@ -1382,7 +1480,7 @@ void editorProcessKeypress() {
         }
 
         default: {
-            editorInsertChar(c);
+            handleByte(c);
             break;
         }
     }
@@ -1416,6 +1514,10 @@ void initEditor() {
 
 
 int main(int argc, char* argv[]) {
+    if (NULL == setlocale(LC_CTYPE, "UTF-8")) {
+        dieWithMsg("'UTF-8' is not a supported locale !\n");
+    }
+
     getTTY();
     initWindow();
     initEditor();

@@ -1,2 +1,2 @@
 sk: sk.c
-	$(CC) -lncurses sk.c -o sk -Wall -Wextra -pedantic -std=c99
+	$(CC) -D_XOPEN_SOURCE_EXTENDED -lncurses sk.c -o sk -Wall -Wextra -pedantic -std=c99
