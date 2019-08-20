@@ -32,6 +32,7 @@
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define KEY_ESC ('\x1b')
+#define BACKSPACE (127)
 
 enum editorHighlight {
     HL_NORMAL = 1,
@@ -1195,7 +1196,7 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int)) {
         editorRefreshScreen();
 
         int c = getch();
-        if (c == KEY_DC || c == CTRL_KEY('h') || c == KEY_BACKSPACE) {
+        if (c == KEY_DC || c == CTRL_KEY('h') || c == KEY_BACKSPACE || c == BACKSPACE) {
             if (buflen > 0) {
                 buf[--buflen] = '\0';
             }
@@ -1321,6 +1322,7 @@ void editorProcessKeypress() {
             break;
         }
 
+        case BACKSPACE:
         case KEY_BACKSPACE:
         case CTRL_KEY('h'):
         case KEY_DC: {
