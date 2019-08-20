@@ -34,7 +34,7 @@
 #define KEY_ESC ('\x1b')
 
 enum editorHighlight {
-    HL_NORMAL = 0,
+    HL_NORMAL = 1,
     HL_COMMENT,
     HL_MLCOMMENT,
     HL_KEYWORD1,
@@ -139,11 +139,27 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int));
 
 
 
+void initColors() {
+    use_default_colors();
+    start_color();
+    init_pair(HL_NORMAL, COLOR_BLACK, -1);
+    init_pair(HL_COMMENT, COLOR_GREEN, -1);
+    init_pair(HL_MLCOMMENT, COLOR_GREEN, -1);
+    init_pair(HL_KEYWORD1, COLOR_RED, -1);
+    init_pair(HL_KEYWORD2, COLOR_MAGENTA, -1);
+    init_pair(HL_STRING, COLOR_BLUE, -1);
+    init_pair(HL_NUMBER, COLOR_CYAN, -1);
+    init_pair(HL_MATCH, COLOR_RED, -1);
+}
+
+
+
 void initWindow() {
     E.window = initscr();
     raw();
     noecho();
     keypad(E.window, true);
+    initColors();
 }
 
 
@@ -151,6 +167,26 @@ void initWindow() {
 void cleanup() {
     delwin(E.window);
     endwin();
+}
+
+
+
+void colorOn(int color) {
+    if (has_colors() == FALSE) {
+        return;
+    }
+
+    attron(COLOR_PAIR(color));
+}
+
+
+
+void colorOff(int color) {
+    if (has_colors() == FALSE) {
+        return;
+    }
+
+    attroff(COLOR_PAIR(color));
 }
 
 
@@ -324,21 +360,6 @@ void editorUpdateSyntax(struct erow* row) {
     row->hl_open_comment = in_comment;
     if (changed && row->idx + 1 < E.numrows) {
         editorUpdateSyntax(&E.rows[row->idx + 1]);
-    }
-}
-
-
-
-int editorSyntaxToColor(int hl) {
-    switch(hl) {
-        case HL_COMMENT:
-        case HL_MLCOMMENT: return 36;
-        case HL_KEYWORD1: return 33;
-        case HL_KEYWORD2: return 32;
-        case HL_STRING: return 35;
-        case HL_NUMBER: return 31;
-        case HL_MATCH: return 34;
-        default: return 37;
     }
 }
 
@@ -989,36 +1010,6 @@ void editorFind() {
 
 
 
-/************************************ append buffer ************************************/
-
-struct abuf {
-    char* b;
-    int len;
-};
-
-#define ABUF_INIT { NULL, 0 }
-
-
-
-void abAppend(struct abuf* ab, const char* s, int len) {
-    char* new = realloc(ab->b, ab->len + len);
-
-    if (new == NULL) {
-        return;
-    }
-    memcpy(&new[ab->len], s, len);
-    ab->b = new;
-    ab->len += len;
-}
-
-
-
-void abFree(struct abuf* ab) {
-    free(ab->b);
-}
-
-
-
 /************************************ output ************************************/
 
 
@@ -1043,10 +1034,14 @@ void editorScroll() {
     }
 }
 
-void editorDrawRows(struct abuf* ab) {
+
+
+void editorDrawRows() {
     int y;
     for (y = 0 ; y < E.screenrows; y++) {
         int filerow = y + E.rowoff;
+        int x = 0;
+        colorOn(HL_NORMAL);
         if (filerow >= E.numrows) {
             if (E.numrows == 0 && y == E.screenrows / 3) {
                 char welcome[80];
@@ -1057,16 +1052,19 @@ void editorDrawRows(struct abuf* ab) {
                 }
                 int padding = (E.screencols - welcomelen) / 2;
                 if (padding) {
-                    abAppend(ab, "~", 1);
+                    mvprintw(y, x++, "~");
                     padding--;
                 }
                 while (padding--) {
-                    abAppend(ab, " ", 1);
+                    mvprintw(y, x++, " ");
                 }
-                abAppend(ab, welcome, welcomelen);
+                mvprintw(y, x, welcome);
+                clrtoeol();
             } else {
-                abAppend(ab, "~", 1);
+                mvprintw(y, 0, "~");
+                clrtoeol();
             }
+        colorOff(HL_NORMAL);
         } else {
             int len = E.rows[filerow].rsize - E.coloff;
             if (len < 0) {
@@ -1077,48 +1075,33 @@ void editorDrawRows(struct abuf* ab) {
             }
             char* c = &E.rows[filerow].render[E.coloff];
             unsigned char* hl = &E.rows[filerow].hl[E.coloff];
-            int current_color = -1;
+            int current_color = HL_NORMAL;
+            colorOn(current_color);
             int j;
+            move(y, x);
             for (j = 0 ; j < len ; j++) {
+                if (hl[j] != current_color) {
+                    colorOff(current_color);
+                    current_color = hl[j];
+                    colorOn(current_color);
+                }
                 if (iscntrl(c[j])) {
                     char sym = (c[j] <= 26) ? '@' + c[j] : '?';
-                    abAppend(ab, "\x1b[7m", 4);
-                    abAppend(ab, &sym, 1);
-                    abAppend(ab, "\x1b[m", 3);
-                    if (current_color != -1) {
-                        char buf[16];
-                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
-                        abAppend(ab, buf, clen);
-                    }
-                } else if (hl[j] == HL_NORMAL) {
-                    if (current_color != -1) {
-                        abAppend(ab, "\x1b[39m", 5);
-                        current_color = -1;
-                    }
-                    abAppend(ab, &c[j], 1);
+                    mvaddch(y, x++, sym);
                 } else {
-                    int color = editorSyntaxToColor(hl[j]);
-                    if (color != current_color) {
-                        current_color = color;
-                        char buf[16];
-                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color);
-                        abAppend(ab, buf, clen);
-                    }
-                    abAppend(ab, &c[j], 1);
+                    mvaddch(y, x++, c[j]);
                 }
             }
-            abAppend(ab, "\x1b[39m", 5);
+            clrtoeol();
         }
-
-        abAppend(ab, "\x1b[K", 3);
-        abAppend(ab, "\r\n", 2);
     }
 }
 
 
 
-void editorDrawStatusBar(struct abuf* ab) {
-    abAppend(ab, "\x1b[7m", 4);
+void editorDrawStatusBar() {
+
+    colorOn(HL_NORMAL);
 
     char status[80];
     char rstatus[80];
@@ -1130,56 +1113,58 @@ void editorDrawStatusBar(struct abuf* ab) {
     if (len > E.screencols) {
         len = E.screencols;
     }
-    abAppend(ab, status, len);
+    int y = E.screenrows;
+    int x = 0;
+    mvprintw(y, x, status);
+    x += len;
 
     while (len < E.screencols) {
         if (E.screencols - len == rlen) {
-            abAppend(ab, rstatus, rlen);
+            mvprintw(y, x, rstatus);
+            x += rlen;
             break;
         }
-        abAppend(ab, " ", 1);
+        mvprintw(y, x++, " ");
         len++;
     }
-    abAppend(ab, "\x1b[m", 3);
-    abAppend(ab, "\r\n", 2);
+    clrtoeol();
+    colorOff(HL_NORMAL);
 }
 
 
 
-void editorDrawMessageBar(struct abuf* ab) {
-    abAppend(ab, "\x1b[K", 3);
+void editorDrawMessageBar() {
+    int y = E.screenrows + 1;
+    colorOn(HL_NORMAL);
     int msglen = strlen(E.statusmsg);
     if (msglen > E.screencols) {
         msglen = E.screencols;
     }
+    move(y, 0);
     if (msglen && time(NULL) - E.statusmsg_time < 5) {
-        abAppend(ab, E.statusmsg, msglen);
+        char old = E.statusmsg[msglen];
+        E.statusmsg[msglen] = '\0';
+        mvprintw(y, 0, E.statusmsg);
+        E.statusmsg[msglen] = old;
     }
+    clrtoeol();
+    colorOff(HL_NORMAL);
 }
 
 
 
 void editorRefreshScreen() {
     editorScroll();
-    struct abuf ab = ABUF_INIT;
 
-    abAppend(&ab, "\x1b[?25l", 6);
-    abAppend(&ab, "\x1b[H", 3);
+    editorDrawRows();
+    editorDrawStatusBar();
+    editorDrawMessageBar();
 
-    editorDrawRows(&ab);
-    editorDrawStatusBar(&ab);
-    editorDrawMessageBar(&ab);
+    int cursorX = (E.rx - E.coloff);
+    int cursorY = (E.cy - E.rowoff);
+    mvchgat(cursorY, cursorX, 1, A_REVERSE, 0, NULL);
 
-    char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1,
-                                                (E.rx - E.coloff) + 1);
-    abAppend(&ab, buf, strlen(buf));
-
-    abAppend(&ab, "\x1b[?25h", 6);
-
-    write(STDOUT_FILENO, ab.b, ab.len);
-    abFree(&ab);
-
+    refresh();
 }
 
 
