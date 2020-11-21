@@ -1086,7 +1086,7 @@ void editorFind() {
     int saved_coloff = E.coloff;
     int saved_rowoff = E.rowoff;
 
-    wchar_t* query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback);
+    wchar_t* query = editorPrompt("Search: %S (Use ESC/Arrows/Enter)", editorFindCallback);
     if (query) {
         free(query);
     } else {
