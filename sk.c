@@ -1053,7 +1053,7 @@ void editorFindCallback(wchar_t* query, int key) {
     }
     int current = last_match;
     int i;
-    for (i = 0 ; E.numrows ; i++) {
+    for (i = 0 ; i < E.numrows ; i++) {
         current += direction;
         if (current == -1) {
             current = E.numrows - 1;
